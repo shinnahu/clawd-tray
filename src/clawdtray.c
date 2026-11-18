@@ -12,17 +12,28 @@
  */
 #define WIN32_LEAN_AND_MEAN
 #define _CRT_SECURE_NO_WARNINGS
+#define COBJMACROS
 #include <windows.h>
+#include <ole2.h>          /* LEAN_AND_MEAN leaves OLE out; the shell COM headers below need it */
 #include <shellapi.h>
 #include <commctrl.h>
+#include <exdisp.h>
+#include <shlobj.h>
+#include <shldisp.h>
+#include <servprov.h>
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
+#include <time.h>
 #include "frames.h"
 #pragma comment(lib, "user32.lib")
 #pragma comment(lib, "shell32.lib")
 #pragma comment(lib, "gdi32.lib")
 #pragma comment(lib, "advapi32.lib")
+#pragma comment(lib, "ole32.lib")      /* delay-loaded (see build.cmd): only setup and relaunch use COM */
+#pragma comment(lib, "oleaut32.lib")
+#pragma comment(lib, "uuid.lib")
+#pragma comment(lib, "delayimp.lib")
 
 #define APP_NAME      L"Clawd Tray"
 #define WND_CLASS     L"ClawdTrayWnd"
@@ -183,6 +194,59 @@ static void settings_path(WCHAR *out) {
 }
 static const WCHAR *wbasename(const WCHAR *p) { const WCHAR *b = wcsrchr(p, L'\\'); return b ? b + 1 : p; }
 
+/* ================================================================== starting the tray detached
+ * A program started from a terminal inherits that terminal's job object, and some hosts (the Claude
+ * app among them) end the whole job when they close. So the tray is always started the way Explorer
+ * would start it: through the shell's own ShellExecute, which makes it a child of Explorer.        */
+static DWORD pref_get(const WCHAR *name, DWORD def);
+static void pref_set(const WCHAR *name, DWORD v);
+static int autostart_enabled(void);
+
+static int shell_launch(const WCHAR *exe) {
+    int ok = 0;
+    HRESULT init = CoInitializeEx(NULL, COINIT_APARTMENTTHREADED);
+    IShellWindows *sw = NULL; IDispatch *disp = NULL, *bg = NULL, *app = NULL; IServiceProvider *sp = NULL;
+    IShellBrowser *br = NULL; IShellView *view = NULL; IShellFolderViewDual *fv = NULL; IShellDispatch2 *sd = NULL;
+    VARIANT loc, empty; long hwnd = 0;
+    VariantInit(&loc); VariantInit(&empty); V_VT(&loc) = VT_I4; V_I4(&loc) = CSIDL_DESKTOP;
+    if (SUCCEEDED(CoCreateInstance(&CLSID_ShellWindows, NULL, CLSCTX_LOCAL_SERVER, &IID_IShellWindows, (void **)&sw)) &&
+        SUCCEEDED(IShellWindows_FindWindowSW(sw, &loc, &empty, SWC_DESKTOP, &hwnd, SWFO_NEEDDISPATCH, &disp)) && disp &&
+        SUCCEEDED(IDispatch_QueryInterface(disp, &IID_IServiceProvider, (void **)&sp)) &&
+        SUCCEEDED(IServiceProvider_QueryService(sp, &SID_STopLevelBrowser, &IID_IShellBrowser, (void **)&br)) &&
+        SUCCEEDED(IShellBrowser_QueryActiveShellView(br, &view)) &&
+        SUCCEEDED(IShellView_GetItemObject(view, SVGIO_BACKGROUND, &IID_IDispatch, (void **)&bg)) &&
+        SUCCEEDED(IDispatch_QueryInterface(bg, &IID_IShellFolderViewDual, (void **)&fv)) &&
+        SUCCEEDED(IShellFolderViewDual_get_Application(fv, &app)) &&
+        SUCCEEDED(IDispatch_QueryInterface(app, &IID_IShellDispatch2, (void **)&sd))) {
+        BSTR file = SysAllocString(exe);
+        VARIANT none, show; VariantInit(&none); VariantInit(&show); V_VT(&show) = VT_I4; V_I4(&show) = SW_SHOWNORMAL;
+        ok = SUCCEEDED(IShellDispatch2_ShellExecute(sd, file, none, none, none, show));
+        SysFreeString(file);
+    }
+    if (sd) IShellDispatch2_Release(sd);
+    if (app) IDispatch_Release(app);
+    if (fv) IShellFolderViewDual_Release(fv);
+    if (bg) IDispatch_Release(bg);
+    if (view) IShellView_Release(view);
+    if (br) IShellBrowser_Release(br);
+    if (sp) IServiceProvider_Release(sp);
+    if (disp) IDispatch_Release(disp);
+    if (sw) IShellWindows_Release(sw);
+    if (SUCCEEDED(init)) CoUninitialize();
+    return ok;
+}
+static void launch_tray(const WCHAR *exe) {
+    if (shell_launch(exe)) return;
+    /* no shell available: fall back to breaking away from our job, then to a plain start */
+    WCHAR cmd[MAX_PATH + 4]; wsprintfW(cmd, L"\"%s\"", exe);
+    STARTUPINFOW si; PROCESS_INFORMATION pi; memset(&si, 0, sizeof si); si.cb = sizeof si;
+    if (CreateProcessW(exe, cmd, NULL, NULL, FALSE, CREATE_BREAKAWAY_FROM_JOB, NULL, NULL, &si, &pi) ||
+        CreateProcessW(exe, cmd, NULL, NULL, FALSE, 0, NULL, NULL, &si, &pi)) { CloseHandle(pi.hThread); CloseHandle(pi.hProcess); }
+}
+/* A hook found no tray: if Clawd is meant to be running (autostart on, not closed with Exit), bring
+ * it back. At most once a minute, so a tray that can't start never turns into a launch storm. */
+static void hook_relaunch(void);
+
 /* ================================================================== hook mode */
 static int hook_main(void) {
     HANDLE in = GetStdHandle(STD_INPUT_HANDLE);
@@ -230,7 +294,7 @@ static int hook_main(void) {
     if (w) {
         COPYDATASTRUCT cds; cds.dwData = COPYDATA_MAGIC; cds.cbData = sizeof m; cds.lpData = &m;
         DWORD_PTR r; SendMessageTimeoutW(w, WM_COPYDATA, 0, (LPARAM)&cds, SMTO_ABORTIFHUNG | SMTO_BLOCK, 1000, &r);
-    }
+    } else hook_relaunch();
     return 0;
 }
 
@@ -346,6 +410,37 @@ static void set_autostart(int on) {
     else { HKEY k; if (!RegOpenKeyExW(HKEY_CURRENT_USER, RUN_KEY, 0, KEY_SET_VALUE, &k)) { RegDeleteValueW(k, L"ClawdTray"); RegCloseKey(k); } }
 }
 
+static void hook_relaunch(void) {
+    init_paths();
+    if (lstrcmpiW(g_self, g_installExe)) return;                 /* only the installed copy does this */
+    if (!autostart_enabled() || pref_get(L"UserExited", 0)) return;
+    DWORD now = (DWORD)time(NULL), last = pref_get(L"LastRelaunch", 0);
+    if (now - last < 60) return;
+    pref_set(L"LastRelaunch", now);
+    launch_tray(g_installExe);
+}
+
+/* ================================================================== Start menu shortcut */
+static void shortcut_path(WCHAR *out) {
+    WCHAR ad[MAX_PATH]; GetEnvironmentVariableW(L"APPDATA", ad, MAX_PATH);
+    wsprintfW(out, L"%s\\Microsoft\\Windows\\Start Menu\\Programs\\Clawd Tray.lnk", ad);
+}
+static void make_shortcut(void) {
+    HRESULT init = CoInitializeEx(NULL, COINIT_APARTMENTTHREADED);
+    IShellLinkW *sl = NULL; IPersistFile *pf = NULL; WCHAR lnk[MAX_PATH];
+    if (SUCCEEDED(CoCreateInstance(&CLSID_ShellLink, NULL, CLSCTX_INPROC_SERVER, &IID_IShellLinkW, (void **)&sl))) {
+        IShellLinkW_SetPath(sl, g_installExe);
+        IShellLinkW_SetWorkingDirectory(sl, g_installDir);
+        IShellLinkW_SetDescription(sl, L"Animated Clawd that shows what Claude Code is doing");
+        IShellLinkW_SetIconLocation(sl, g_installExe, 0);
+        if (SUCCEEDED(IShellLinkW_QueryInterface(sl, &IID_IPersistFile, (void **)&pf))) {
+            shortcut_path(lnk); IPersistFile_Save(pf, lnk, TRUE); IPersistFile_Release(pf);
+        }
+        IShellLinkW_Release(sl);
+    }
+    if (SUCCEEDED(init)) CoUninitialize();
+}
+
 /* ================================================================== install / uninstall */
 static void close_running_tray(void) {
     HWND w = FindWindowW(WND_CLASS, NULL); if (!w) return;
@@ -381,7 +476,9 @@ static int do_install(void) {
     reg_set_dw(HKEY_CURRENT_USER, UNINST_KEY, L"NoModify", 1);
     reg_set_dw(HKEY_CURRENT_USER, UNINST_KEY, L"NoRepair", 1);
     reg_set_dw(HKEY_CURRENT_USER, UNINST_KEY, L"EstimatedSize", 200);
-    launch(g_installExe, NULL);
+    make_shortcut();
+    pref_set(L"UserExited", 0);
+    launch_tray(g_installExe);
     if (!hooksOk) { WCHAR t[900]; _snwprintf(t, 900, L"Clawd is running, but the hooks were not added:\n\n%s", err); msg(MB_ICONWARNING, t); return 3; }
     if (!g_quiet && msg(MB_YESNO | MB_ICONINFORMATION,
         L"Done! Clawd is in your tray.\n\n"
@@ -406,6 +503,7 @@ static int do_uninstall(int fromTray) {
     set_autostart(0);
     RegDeleteKeyW(HKEY_CURRENT_USER, UNINST_KEY);
     RegDeleteKeyW(HKEY_CURRENT_USER, PREFS_KEY);
+    { WCHAR lnk[MAX_PATH]; shortcut_path(lnk); DeleteFileW(lnk); }
     schedule_self_delete();
     if (!ok) { WCHAR t[900]; _snwprintf(t, 900, L"Uninstalled, but the hooks could not be removed:\n\n%s", err); msg(MB_ICONWARNING, t); }
     else msg(MB_ICONINFORMATION, L"Clawd Tray was uninstalled.");
@@ -813,7 +911,7 @@ static void show_menu(void) {
     case ID_AUTOSTART: set_autostart(!autostart_enabled()); break;
     case ID_TASKBAR: launch(L"ms-settings:taskbar", NULL); break;
     case ID_UNINSTALL: if (do_uninstall(1) == 0) DestroyWindow(g_wnd); break;
-    case ID_EXIT: DestroyWindow(g_wnd); break;
+    case ID_EXIT: pref_set(L"UserExited", 1); DestroyWindow(g_wnd); break;   /* hooks won't bring it back */
     case ID_PV_IDLE: g_preview = S_IDLE; refresh(); break;
     case ID_PV_WORK: g_preview = S_WORK; refresh(); break;
     case ID_PV_DONE: g_preview = S_DONE; refresh(); break;
@@ -879,6 +977,7 @@ static int tray_main(void) {
     if (g_ovScale == 2 || g_ovScale == 3) g_ovScale *= 100;                 /* value saved by the first version */
     if (g_ovScale != 0 && g_ovScale != 150 && g_ovScale != 300) g_ovScale = 200;
     g_trayPref = pref_get(L"TrayIcon", 0) ? 1 : 0;
+    if (pref_get(L"UserExited", 0)) pref_set(L"UserExited", 0);   /* started again: hooks may revive it */
     g_wnd = CreateWindowExW(WS_EX_TOOLWINDOW, WND_CLASS, L"Clawd Tray", WS_POPUP, 0, 0, 0, 0, NULL, NULL, wc.hInstance, NULL);
     ChangeWindowMessageFilterEx(g_wnd, WM_COPYDATA, MSGFLT_ALLOW, NULL);
     g_taskbarCreated = RegisterWindowMessageW(L"TaskbarCreated");

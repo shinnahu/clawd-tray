@@ -16,6 +16,6 @@ call "%VSDIR%\VC\Auxiliary\Build\vcvars64.bat" >nul 2>nul || exit /b 1
 echo [2/2] Compiling...
 if not exist ..\dist mkdir ..\dist
 rc /nologo /fo clawdtray.res clawdtray.rc || exit /b 1
-cl /nologo /O1 /Os /MT /GS- /W3 /DUNICODE /D_UNICODE clawdtray.c clawdtray.res /Fe..\dist\ClawdTray-Setup.exe /link /SUBSYSTEM:WINDOWS /OPT:REF /OPT:ICF /MANIFEST:EMBED /MANIFESTUAC:NO /MANIFESTINPUT:clawdtray.manifest || exit /b 1
+cl /nologo /O1 /Os /MT /GS- /W3 /DUNICODE /D_UNICODE clawdtray.c clawdtray.res /Fe..\dist\ClawdTray-Setup.exe /link /SUBSYSTEM:WINDOWS /OPT:REF /OPT:ICF /MANIFEST:EMBED /MANIFESTUAC:NO /MANIFESTINPUT:clawdtray.manifest /DELAYLOAD:ole32.dll /DELAYLOAD:oleaut32.dll || exit /b 1
 del /q clawdtray.obj clawdtray.res 2>nul
 echo Built dist\ClawdTray-Setup.exe

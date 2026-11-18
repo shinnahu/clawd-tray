@@ -59,7 +59,8 @@ Run `ClawdTray-Setup.exe` and confirm. It will:
 
 - copy itself to `%LOCALAPPDATA%\Programs\ClawdTray\ClawdTray.exe`
 - add the hooks to `~/.claude/settings.json` (or `%CLAUDE_CONFIG_DIR%`). It keeps a backup next to it as `settings.json.clawdtray.bak` and leaves your other settings and hooks alone.
-- start with Windows, and add an entry to *Apps & features*
+- start with Windows, add a **Clawd Tray** shortcut to the Start menu, and add an entry to *Apps & features*
+- start Clawd through Explorer, the same way the Start menu would. Closing the terminal or app you ran setup from doesn't take Clawd with it.
 
 Only new Claude Code sessions use the hooks; sessions that are already open keep the hooks they started with.
 
@@ -72,7 +73,12 @@ Right-click Clawd:
 - **Open Claude**: the same as a left click
 - **Preview animations**: play each state on demand
 - **Size**: 1.5×, 2× or 3× on the taskbar, or the small tray icon only. You can also keep the small tray icon next to the big one.
-- **Reset status**, **Start with Windows**, **Uninstall…**, **Exit**
+- **Reset status**, **Start with Windows**, **Uninstall…**
+- **Exit**: closes Clawd until you start it again from the Start menu
+
+## If Clawd disappears
+
+Start **Clawd Tray** from the Start menu. If anything other than **Exit** closed it, the next Claude Code hook starts it again on its own (at most once a minute, and only while **Start with Windows** is on).
 
 ## Command line
 
