@@ -84,3 +84,7 @@ ClawdTray.exe --tray            run the tray from any folder (for testing)
 ## Uninstall
 
 Use *Apps & features → Clawd Tray*, or **Uninstall…** in the menu. It removes the hooks, the autostart entry, its settings and the program.
+
+## License
+
+The code is under the [MIT License](LICENSE). It does not cover Clawd or its artwork, which belong to Anthropic.
