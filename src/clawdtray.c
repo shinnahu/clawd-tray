@@ -484,7 +484,7 @@ static void tray_remove(void) { if (g_trayAdded) { Shell_NotifyIconW(NIM_DELETE,
  * Tray icons are capped at the small-icon size (16 px at 100%). For a bigger Clawd we add a tiny
  * per-pixel-alpha child window to the taskbar, just left of the notification area. Being a child of
  * the taskbar it hides with it (auto-hide, full-screen apps) and needs no z-order fights.          */
-static HWND g_ov, g_tt; static int g_ovScale = 2, g_ovPx, g_trayPref;
+static HWND g_ov, g_tt; static int g_ovScale = 200 /* percent of 16 px; 0 = off */, g_ovPx, g_trayPref;
 static HDC g_ovDC; static HBITMAP g_ovBmp, g_ovOld; static unsigned int *g_ovBits;
 static RECT g_ovRect;
 static void ack(void); static void open_claude(void); static void show_menu(void);
@@ -495,9 +495,12 @@ static int screen_dpi(void) { HDC dc = GetDC(NULL); int d = GetDeviceCaps(dc, LO
 static void ov_draw(void) {
     if (!g_ov || !g_ovBits) return;
     int S = g_ovPx, f = g_shown < 0 ? F_FRONT : g_shown;
+    int big = (g_ovScale == 150);   /* 1.5x = the app's art at its own resolution (24 px set) */
+    int N = big ? 24 : 16;
+    const unsigned char *art = big ? FRAMES24[f] : FRAMES[f];
     for (int y = 0; y < S; y++) for (int x = 0; x < S; x++) {
-        int sx = x * 16 / S, sy = y * 16 / S;
-        unsigned char b = FRAMES[f][sy * 8 + (sx >> 1)];
+        int sx = x * N / S, sy = y * N / S;
+        unsigned char b = art[sy * (N / 2) + (sx >> 1)];
         g_ovBits[y * S + x] = PALETTE[(sx & 1) ? (b & 15) : (b >> 4)];   /* opaque or fully clear: already premultiplied */
     }
     POINT src = { 0, 0 }; SIZE sz = { S, S };
@@ -549,7 +552,7 @@ static void sync_tray_icon(void) {   /* small tray icon: when the big one is off
 }
 static void ov_create(void) {
     HWND tb = FindWindowW(L"Shell_TrayWnd", NULL);
-    int px = 16 * g_ovScale * screen_dpi() / 96;
+    int px = 16 * g_ovScale * screen_dpi() / 9600;
     if (g_ov && (!IsWindow(g_ov) || GetParent(g_ov) != tb || px != g_ovPx)) ov_destroy();
     if (!g_ovScale || !tb) { ov_destroy(); sync_tray_icon(); return; }
     if (!g_ov) {
@@ -760,7 +763,7 @@ static void open_claude(void) {
 /* ================================================================== tray: menu & window */
 enum { ID_OPEN = 100, ID_RESET, ID_AUTOSTART, ID_TASKBAR, ID_UNINSTALL, ID_EXIT,
        ID_PV_IDLE, ID_PV_WORK, ID_PV_DONE, ID_PV_ASK, ID_PV_ERR, ID_PV_LIVE,
-       ID_SZ_OFF, ID_SZ_2, ID_SZ_3, ID_KEEP_TRAY };
+       ID_SZ_OFF, ID_SZ_15, ID_SZ_2, ID_SZ_3, ID_KEEP_TRAY };
 
 static void set_scale(int s) {
     g_ovScale = s; pref_set(L"TaskbarScale", (DWORD)s);
@@ -780,8 +783,9 @@ static void show_menu(void) {
     AppendMenuW(pv, MF_SEPARATOR, 0, NULL);
     AppendMenuW(pv, MF_STRING | (g_preview < 0 ? MF_CHECKED : 0), ID_PV_LIVE, L"Back to live status");
     AppendMenuW(m, MF_POPUP, (UINT_PTR)pv, L"Preview animations");
-    AppendMenuW(sz, MF_STRING | (g_ovScale == 2 ? MF_CHECKED : 0), ID_SZ_2, L"2\x00D7 on the taskbar");
-    AppendMenuW(sz, MF_STRING | (g_ovScale == 3 ? MF_CHECKED : 0), ID_SZ_3, L"3\x00D7 on the taskbar");
+    AppendMenuW(sz, MF_STRING | (g_ovScale == 150 ? MF_CHECKED : 0), ID_SZ_15, L"1.5\x00D7 on the taskbar");
+    AppendMenuW(sz, MF_STRING | (g_ovScale == 200 ? MF_CHECKED : 0), ID_SZ_2, L"2\x00D7 on the taskbar");
+    AppendMenuW(sz, MF_STRING | (g_ovScale == 300 ? MF_CHECKED : 0), ID_SZ_3, L"3\x00D7 on the taskbar");
     AppendMenuW(sz, MF_STRING | (g_ovScale == 0 ? MF_CHECKED : 0), ID_SZ_OFF, L"Small (tray icon only)");
     AppendMenuW(sz, MF_SEPARATOR, 0, NULL);
     AppendMenuW(sz, MF_STRING | (g_trayPref ? MF_CHECKED : 0) | (g_ovScale ? 0 : MF_GRAYED), ID_KEEP_TRAY, L"Also keep the small tray icon");
@@ -800,8 +804,9 @@ static void show_menu(void) {
     SetTimer(g_wnd, TIMER_TRIM, 5000, NULL);
     switch (cmd) {
     case ID_SZ_OFF: set_scale(0); break;
-    case ID_SZ_2: set_scale(2); break;
-    case ID_SZ_3: set_scale(3); break;
+    case ID_SZ_15: set_scale(150); break;
+    case ID_SZ_2: set_scale(200); break;
+    case ID_SZ_3: set_scale(300); break;
     case ID_KEEP_TRAY: g_trayPref = !g_trayPref; pref_set(L"TrayIcon", (DWORD)g_trayPref); sync_tray_icon(); break;
     case ID_OPEN: ack(); open_claude(); break;
     case ID_RESET: g_preview = -1; for (int i = 0; i < g_ns; i++) { g_s[i].st = S_IDLE; g_s[i].permAt = 0; g_s[i].blocked = 0; } refresh(); break;
@@ -870,7 +875,9 @@ static int tray_main(void) {
     WNDCLASSW oc; memset(&oc, 0, sizeof oc);
     oc.lpfnWndProc = ov_proc; oc.hInstance = wc.hInstance; oc.lpszClassName = OV_CLASS; oc.hCursor = LoadCursorW(NULL, IDC_HAND);
     RegisterClassW(&oc);
-    g_ovScale = (int)pref_get(L"TaskbarScale", 2); if (g_ovScale != 0 && g_ovScale != 3) g_ovScale = 2;
+    g_ovScale = (int)pref_get(L"TaskbarScale", 200);
+    if (g_ovScale == 2 || g_ovScale == 3) g_ovScale *= 100;                 /* value saved by the first version */
+    if (g_ovScale != 0 && g_ovScale != 150 && g_ovScale != 300) g_ovScale = 200;
     g_trayPref = pref_get(L"TrayIcon", 0) ? 1 : 0;
     g_wnd = CreateWindowExW(WS_EX_TOOLWINDOW, WND_CLASS, L"Clawd Tray", WS_POPUP, 0, 0, 0, 0, NULL, NULL, wc.hInstance, NULL);
     ChangeWindowMessageFilterEx(g_wnd, WM_COPYDATA, MSGFLT_ALLOW, NULL);

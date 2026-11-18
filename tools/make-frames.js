@@ -169,11 +169,32 @@ function tray16(grids, t) {
   return resample(g, camera(t));
 }
 
+// ------------------------------------------------------------------ 24x24: the app's art 1:1 (used at 1.5x)
+// Same cameras as the 16 px set, but one 50-grid cell per pixel, so nothing is resampled.
+function window24(grid, { X0, lx }) {
+  const c = Array.from({ length: 24 }, () => Array(24).fill('.'));
+  for (let y = 0; y < 24; y++) for (let x = 0; x < 24; x++) {
+    const v = grid.get((X0 + x) + ',' + (Y0 + y));
+    if (v && v !== 'L') c[y][x] = v;
+    else if (lx !== 99 && grid.get((X0 + x - lx) + ',' + (Y0 + y)) === 'L') c[y][x] = 'L';
+  }
+  return c;
+}
+const LAPTOP24 = [[0, 13], [0, 14], [0, 15], [0, 16], [1, 17], [1, 18], [1, 19], [1, 20], [1, 21], [2, 21], [3, 21], [4, 21], [5, 21]];
+const withLaptop24 = f => { for (const [x, y] of LAPTOP24) if (f[y][x] === '.') f[y][x] = 'L'; return f; };
+function tray24(grids, t) {
+  const g = grids[t];
+  if (t >= 15 && t <= 32) return withLaptop24(window24(g, { X0: -42, lx: 99 }));
+  if (t >= 33 && t <= 35) return window24(g, { X0: -42, lx: 4 });
+  if (t >= 12 && t <= 14) return withLaptop24(window24(g, { X0: -40, lx: 99 }));
+  return window24(g, camera(t));
+}
+
 // ------------------------------------------------------------------ emotes, frame table, sequences
 const clone = f => f.map(r => r.slice());
 function blink(f) {
-  const g = clone(f);
-  for (let y = 0; y < 15; y++) for (let x = 0; x < 16; x++)
+  const g = clone(f), n = f.length;
+  for (let y = 0; y < n - 1; y++) for (let x = 0; x < n; x++)
     if (f[y][x] === 'K' && f[y + 1][x] === 'K') { g[y][x] = 'O'; g[y + 1][x] = 'o'; }
   return g;
 }
@@ -182,36 +203,46 @@ const EMOTE = {
   ask: ['.YY.', 'Y..Y', '..Y.', '....', '..Y.'],
   bang: ['RR', 'RR', 'RR', '..', 'RR'],
 };
+const EMOTE24 = {
+  check: ['......G', '.....GG', '....GG.', 'G..GG..', 'GGGG...', '.GG....'],
+  ask: ['.YYYY.', 'YY..YY', '....YY', '...YY.', '..YY..', '......', '..YY..'],
+  bang: ['RR', 'RR', 'RR', 'RR', '..', 'RR'],
+};
 function stamp(f, glyph, x0, y0) {
-  const g = clone(f);
-  glyph.forEach((row, j) => [...row].forEach((v, i) => { if (v !== '.' && y0 + j >= 0 && y0 + j < 16) g[y0 + j][x0 + i] = v; }));
+  const g = clone(f), n = f.length;
+  glyph.forEach((row, j) => [...row].forEach((v, i) => { if (v !== '.' && y0 + j >= 0 && y0 + j < n) g[y0 + j][x0 + i] = v; }));
   return g;
+}
+// every frame exists at both sizes, in the same order
+function frameSet(base, E, at) {
+  const front = base[0], out = base.map((f, t) => ['L' + t, f]);
+  out.push(['blink', blink(front)]);
+  out.push(['done', stamp(front, E.check, at.check, 0)], ['done_blink', stamp(blink(front), E.check, at.check, 0)], ['done_pop', stamp(front, E.check, at.check, 1)]);
+  out.push(['ask', stamp(front, E.ask, at.ask, 0)], ['ask_up', stamp(front, E.ask, at.ask, -1)], ['ask_blink', stamp(blink(front), E.ask, at.ask, 0)]);
+  out.push(['err', stamp(front, E.bang, at.bang, 0)], ['err_blink', stamp(blink(front), E.bang, at.bang, 0)]);
+  return out;
 }
 
 function build(lottie) {
   const grids = rasterize(lottie);
   if (grids.length < 43) throw new Error('Unexpected Clawd-Laptop animation (only ' + grids.length + ' frames)');
-  const F = [], idx = {};
-  const add = (name, f) => { idx[name] = F.length; F.push([name, f]); };
-  for (let t = 0; t <= 42; t++) add('L' + t, tray16(grids, t));
-  const front = F[idx.L0][1];
-  add('blink', blink(front));
-  add('done', stamp(front, EMOTE.check, 11, 0)); add('done_blink', stamp(blink(front), EMOTE.check, 11, 0)); add('done_pop', stamp(front, EMOTE.check, 11, 1));
-  add('ask', stamp(front, EMOTE.ask, 12, 0)); add('ask_up', stamp(front, EMOTE.ask, 12, -1)); add('ask_blink', stamp(blink(front), EMOTE.ask, 12, 0));
-  add('err', stamp(front, EMOTE.bang, 14, 0)); add('err_blink', stamp(blink(front), EMOTE.bang, 14, 0));
+  const ts = Array.from({ length: 43 }, (_, t) => t);
+  const F = frameSet(ts.map(t => tray16(grids, t)), EMOTE, { check: 11, ask: 12, bang: 14 });
+  const F24 = frameSet(ts.map(t => tray24(grids, t)), EMOTE24, { check: 17, ask: 18, bang: 21 });
+  const idx = {}; F.forEach(([n], i) => { idx[n] = i; });
   const seq = (a, b, ms) => { const r = []; for (let t = a; t <= b; t++) r.push([idx['L' + t], ms]); return r; };
   const SEQ = { TAKE_OUT: seq(0, 16, 83), TYPE: seq(17, 32, 95), PUT_AWAY: seq(33, 42, 83) };
 
   const PAL = { '.': 0, O: 1, o: 2, K: 3, L: 4, G: 5, Y: 6, R: 7 };
-  let h = '// Generated from the Claude desktop app\'s own Clawd-Laptop animation (+ emotes). 16x16, 4-bit palette.\n';
+  const pack = (f, n) => { const b = []; for (let y = 0; y < n; y++) for (let x = 0; x < n; x += 2) b.push((PAL[f[y][x]] << 4) | PAL[f[y][x + 1]]); return b.join(','); };
+  let h = '// Generated from the Claude desktop app\'s own Clawd-Laptop animation (+ emotes). 16x16 and 24x24, 4-bit palette.\n';
   h += 'static const unsigned int PALETTE[8] = {0x00000000,0xFFD97656,0xFFBE684D,0xFF000000,0xFFB4B4B4,0xFF2ECC60,0xFFFFBE28,0xFFF04646};\n';
   h += '#define NFRAMES ' + F.length + '\nstatic const unsigned char FRAMES[NFRAMES][128] = {\n';
-  for (const [n, f] of F) {
-    const bytes = [];
-    for (let y = 0; y < 16; y++) for (let x = 0; x < 16; x += 2) bytes.push((PAL[f[y][x]] << 4) | PAL[f[y][x + 1]]);
-    h += ' {' + bytes.join(',') + '}, // ' + n + '\n';
-  }
+  for (const [n, f] of F) h += ' {' + pack(f, 16) + '}, // ' + n + '\n';
+  h += '};\nstatic const unsigned char FRAMES24[NFRAMES][288] = {\n';
+  for (const [n, f] of F24) h += ' {' + pack(f, 24) + '}, // ' + n + '\n';
   h += '};\n';
+  const front = F[0][1];
   for (const [n, i] of Object.entries(idx)) if (!/^L\d+$/.test(n)) h += '#define F_' + n.toUpperCase() + ' ' + i + '\n';
   h += '#define F_FRONT ' + idx.L0 + '\n';
   for (const [k, v] of Object.entries(SEQ)) h += 'static const unsigned short SEQ_' + k + '[][2] = {' + v.map(([a, b]) => '{' + a + ',' + b + '}').join(',') + '};\n';

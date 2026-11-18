@@ -24,7 +24,7 @@ Each hook runs `ClawdTray.exe --hook` directly, without a shell. It reads the ho
 
 The tray process is a small native Win32 program. It uses about 1.5 MB of RAM and runs no polling loop: timers only fire while an animation is running.
 
-Windows draws tray icons at 16 px at 100% scaling. To show Clawd bigger (2× or 3×), the app adds a small transparent window to the taskbar, just left of the tray icons. You can switch back to the plain tray icon from the menu.
+Windows draws tray icons at 16 px at 100% scaling. To show Clawd bigger (1.5×, 2× or 3×), the app adds a small transparent window to the taskbar, just left of the tray icons. At 1.5× (24 px) it uses the app's art at its original resolution. You can switch back to the plain tray icon from the menu.
 
 ## Build
 
@@ -41,7 +41,7 @@ src\build.cmd
 
 This creates `dist\ClawdTray-Setup.exe` (about 180 KB).
 
-`tools/make-frames.js` finds the app's `ion-dist.asar` (Microsoft Store install or `%LOCALAPPDATA%\AnthropicClaude`). It reads the app's own `Clawd-Laptop` pixel-art animation and resamples it so Clawd fills a 16×16 icon. It also adds the blink, check, `?` and `!` frames. It writes `src/frames.h` and `src/clawd.ico`.
+`tools/make-frames.js` finds the app's `ion-dist.asar` (Microsoft Store install or `%LOCALAPPDATA%\AnthropicClaude`). It reads the app's own `Clawd-Laptop` pixel-art animation and resamples it so Clawd fills a 16×16 icon. It also keeps a 24×24 copy at the art's original resolution for the 1.5× size, and adds the blink, check, `?` and `!` frames. It writes `src/frames.h` and `src/clawd.ico`.
 
 Clawd is Anthropic's character, so this repo contains no Clawd artwork and publishes no binaries. Every build makes its own frames from the app you already have.
 
@@ -63,7 +63,7 @@ Right-click Clawd:
 
 - **Open Claude**: the same as a left click
 - **Preview animations**: play each state on demand
-- **Size**: 2× or 3× on the taskbar, or the small tray icon only. You can also keep the small tray icon next to the big one.
+- **Size**: 1.5×, 2× or 3× on the taskbar, or the small tray icon only. You can also keep the small tray icon next to the big one.
 - **Reset status**, **Start with Windows**, **Uninstall…**, **Exit**
 
 ## Command line
