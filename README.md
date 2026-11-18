@@ -4,6 +4,12 @@ An animated Clawd on your Windows taskbar that shows what Claude Code is doing, 
 
 Unofficial fan project, not affiliated with or endorsed by Anthropic.
 
+<p align="center">
+  <img src="docs/demo.gif" width="280" alt="Clawd blinking, pulling out a laptop and typing, then showing a green check, a question mark and a red exclamation mark">
+</p>
+
+> **About the art:** the preview above shows how Clawd Tray looks. Clawd and its artwork belong to Anthropic and come from the Claude desktop app. They appear here only as a demo. They are not part of the code and not covered by its license, and every build takes them from the Claude app installed on that PC.
+
 ## What it shows
 
 | Clawd | When |
@@ -43,7 +49,9 @@ This creates `dist\ClawdTray-Setup.exe` (about 180 KB).
 
 `tools/make-frames.js` finds the app's `ion-dist.asar` (Microsoft Store install or `%LOCALAPPDATA%\AnthropicClaude`). It reads the app's own `Clawd-Laptop` pixel-art animation and resamples it so Clawd fills a 16×16 icon. It also keeps a 24×24 copy at the art's original resolution for the 1.5× size, and adds the blink, check, `?` and `!` frames. It writes `src/frames.h` and `src/clawd.ico`.
 
-Clawd is Anthropic's character, so this repo contains no Clawd artwork and publishes no binaries. Every build makes its own frames from the app you already have.
+Clawd is Anthropic's character, so apart from the preview GIF this repo contains no Clawd artwork and publishes no binaries. Every build makes its own frames from the app you already have.
+
+`node tools/make-gif.js` renders the README preview (`docs/demo.gif`) from those generated frames.
 
 ## Install
 
