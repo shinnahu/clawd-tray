@@ -1,0 +1,8 @@
+# build output
+dist/
+*.obj
+*.res
+
+# generated from the locally installed Claude app; the Clawd art is not part of this repo
+src/frames.h
+src/clawd.ico
